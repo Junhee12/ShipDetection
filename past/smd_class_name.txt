@@ -1,4 +1,0 @@
-cargo ship
-boat
-special ship
-other
