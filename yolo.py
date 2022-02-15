@@ -9,32 +9,25 @@ from PIL import ImageDraw, ImageFont
 
 from nets.yolo import YoloBody
 from utils.utils import (cvtColor, get_anchors, get_classes, preprocess_input,
-                   resize_image)
+                         resize_image)
 from utils.utils_bbox import DecodeBox
 import cv2
 
 
 class YOLO(object):
     _defaults = {
-        # 사전학습 가중치 설정, '' 미사용
-        "model_path": '',
-        # 클래스 종류 경로
-        "classes_path": 'dataset/voc_names',
+        "weight_path": '',  # 사전학습 가중치 설정, '' 미사용
+        "classes_path": 'dataset/voc_names',  # 클래스 종류 경로
 
-        # ---------------------------------------------------------------------#
-
-        # 앵커 박스의 크기(보통 수정 x)
-        "anchors_path": 'dataset/yolo_anchors.txt',
-        # 스케일에 맞는 앵커 박스 정의(보통 수정 x
-        "anchors_mask": [[6, 7, 8], [3, 4, 5], [0, 1, 2]],
+        "anchors_path": 'dataset/yolo_anchors.txt',  # 앵커 박스의 크기(보통 수정 x)
+        "anchors_mask": [[6, 7, 8], [3, 4, 5], [0, 1, 2]],  # 스케일에 맞는 앵커 박스 정의(보통 수정 x)
 
         "input_shape": [416, 416],  # 입력영상의 크기(32배수) : 416, 608, ...
-        "confidence": 0.5,          # 예측 결과 값이 0.5 이상만 사용
-        "nms_iou": 0.3,             # NMS에서 제거되는 기준
+        "confidence": 0.5,  # 예측 결과 값이 0.5 이상만 사용
+        "nms_iou": 0.3,  # NMS에서 제거되는 기준
 
-        # 입력영상으로 변환 과정에서 기존 비율의 유지 여부(테스트 결과 False가 더 좋음)
-        "letterbox_image": False,
-        "cuda": True,               # CUDA 사용여부
+        "letterbox_image": False,  # 입력영상으로 변환 과정에서 기존 비율의 유지 여부(테스트 결과 False가 더 좋음)
+        "cuda": True,  # CUDA 사용여부
     }
 
     @classmethod
@@ -44,116 +37,70 @@ class YOLO(object):
         else:
             return "Unrecognized attribute name '" + n + "'"
 
+    # ---------------------------------------------------#
     # 초기화
     def __init__(self, **kwargs):
+
         self.__dict__.update(self._defaults)
         for name, value in kwargs.items():
-            setattr(self, name, value)
 
-        # ---------------------------------------------------#
-        #   获得种类和先验框的数量
-        # ---------------------------------------------------#
+            if name == 'model_params':
+                for key, val in value.items():
+                    setattr(self, key, val)
+            else:
+                setattr(self, name, value)
 
-        # 클래스 종류와 갯수
-        self.class_names, self.num_classes = get_classes(self.classes_path)
-        # 앵커와 갯수
-        self.anchors, self.num_anchors = get_anchors(self.anchors_path)
+        self.class_names, self.num_classes = get_classes(self.classes_path)  # 클래스 종류와 갯수
+        self.anchors, self.num_anchors = get_anchors(self.anchors_path)  # 앵커와 갯수
+
         # 앵커의 크기 복호화
         self.bbox_util = DecodeBox(self.anchors, self.num_classes, (self.input_shape[0], self.input_shape[1]),
                                    self.anchors_mask)
 
-        # ---------------------------------------------------#
-        #   画框设置不同的颜色
-        # ---------------------------------------------------#
+        # 클래스마다 다른색상으로 표시
         hsv_tuples = [(x / self.num_classes, 1., 1.) for x in range(self.num_classes)]
         self.colors = list(map(lambda x: colorsys.hsv_to_rgb(*x), hsv_tuples))
         self.colors = list(map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)), self.colors))
-        self.generate()
+
+        self.model = self.generate()
 
     # ---------------------------------------------------#
-    #   生成模型
-    # ---------------------------------------------------#
+    # 모델 생성
     def generate(self):
-        # ---------------------------------------------------#
-        #   建立yolo模型，载入yolo模型的权重
-        # ---------------------------------------------------#
-        self.net = YoloBody(self.anchors_mask, self.num_classes)
+
+        model = YoloBody(self.anchors_mask, self.num_classes)
+
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        if False:
-            state_dict = self.net.state_dict()
+        model.load_state_dict(torch.load(self.weight_path, map_location=device))
 
-            model = torch.load(self.model_path, map_location=device)['model']
-
-            new = list(model.items())
-
-            count = 0
-            for key, value in state_dict.items():
-                layer_name, weights = new[count]
-                state_dict[key] = weights
-                count += 1
-            """
-            pretrained_model = torch.load(self.model_path, map_location=device)['model']
-            pretrained_param_names = list(pretrained_model.keys())
-
-            for i, param in enumerate(state_dict):
-
-                if state_dict[param].shape != pretrained_model[pretrained_param_names[i]].shape:
-                    print('%d error', i)
-
-                print(i, ' ', state_dict[param].numel(), ' ', param, ' : ', state_dict[param].shape, '-----',
-                      pretrained_param_names[i],
-                      pretrained_model[pretrained_param_names[i]].shape)
-
-                state_dict[param] = pretrained_model[pretrained_param_names[i]]
-            """
-
-            self.net.load_state_dict(state_dict)
-        else:
-            self.net.load_state_dict(torch.load(self.model_path, map_location=device))
-
-        self.net = self.net.eval()
-        print('{} model, anchors, and classes loaded.'.format(self.model_path))
+        model = model.eval()
+        print('{} model, anchors, and classes loaded.'.format(self.weight_path))
 
         if self.cuda:
-            self.net = nn.DataParallel(self.net)
-            self.net = self.net.cuda()
+            model = nn.DataParallel(model)
+            model = model.cuda()
+
+        return model
 
     # ---------------------------------------------------#
-    #   检测图片
-    # ---------------------------------------------------#
+    # 이미지 탐지
     def detect_image(self, image):
-        # ---------------------------------------------------#
-        #   计算输入图片的高和宽
-        # ---------------------------------------------------#
+
         image_shape = np.array(np.shape(image)[0:2])
-        # ---------------------------------------------------------#
-        #   在这里将图像转换成RGB图像，防止灰度图在预测时报错。
-        #   代码仅仅支持RGB图像的预测，所有其它类型的图像都会转化成RGB
-        # ---------------------------------------------------------#
-        image = cvtColor(image)
-        # ---------------------------------------------------------#
-        #   给图像增加灰条，实现不失真的resize
-        #   也可以直接resize进行识别
-        # ---------------------------------------------------------#
+        image = cvtColor(image)  # RGB
         image_data = resize_image(image, (self.input_shape[1], self.input_shape[0]), self.letterbox_image)
-        # ---------------------------------------------------------#
-        #   添加上batch_size维度
-        # ---------------------------------------------------------#
         image_data = np.expand_dims(np.transpose(preprocess_input(np.array(image_data, dtype='float32')), (2, 0, 1)), 0)
 
         with torch.no_grad():
             images = torch.from_numpy(image_data)
             if self.cuda:
                 images = images.cuda()
-            # ---------------------------------------------------------#
-            #   将图像输入网络当中进行预测！
-            # ---------------------------------------------------------#
-            outputs = self.net(images)
+
+            # 예측
+            outputs = self.model(images)
             outputs = self.bbox_util.decode_box(outputs)
-            # ---------------------------------------------------------#
-            #   将预测框进行堆叠，然后进行非极大抑制
-            # ---------------------------------------------------------#
+
             results = self.bbox_util.non_max_suppression(torch.cat(outputs, 1), self.num_classes, self.input_shape,
                                                          image_shape, self.letterbox_image, conf_thres=self.confidence,
                                                          nms_thres=self.nms_iou)
@@ -164,16 +111,13 @@ class YOLO(object):
             top_label = np.array(results[0][:, 6], dtype='int32')
             top_conf = results[0][:, 4] * results[0][:, 5]
             top_boxes = results[0][:, :4]
-        # ---------------------------------------------------------#
-        #   设置字体与边框厚度
-        # ---------------------------------------------------------#
+
+        # 텍스트 설정
         font = ImageFont.truetype(font='data/simhei.ttf',
                                   size=np.floor(3e-2 * image.size[1] + 0.5).astype('int32'))
         thickness = int(max((image.size[0] + image.size[1]) // np.mean(self.input_shape), 1))
 
-        # ---------------------------------------------------------#
-        #   图像绘制
-        # ---------------------------------------------------------#
+        # 결과 그리기
         for i, c in list(enumerate(top_label)):
             predicted_class = self.class_names[int(c)]
             box = top_boxes[i]
@@ -205,10 +149,8 @@ class YOLO(object):
 
         return image
 
-        # ---------------------------------------------------#
-        #   检测图片
-        # ---------------------------------------------------#
-
+    # ---------------------------------------------------#
+    # 이미지 탐지(cv2)
     def detect_image_cv2(self, image):
 
         img = letterbox(image, new_shape=(640, 640))[0]
@@ -220,19 +162,18 @@ class YOLO(object):
 
         img = torch.from_numpy(img).to(device)
         img = img.half()
+        #img = img.float()
 
         img /= 255.0  # 0 - 255 to 0.0 - 1.0
         if img.ndimension() == 3:
             img = img.unsqueeze(0)
 
-        self.net.half()
+        self.model.half()
 
         with torch.no_grad():
 
-            # ---------------------------------------------------------#
-            #   prediction
-            # ---------------------------------------------------------#
-            outputs = self.net(img)
+            # 예측
+            outputs = self.model(img)
             outputs = self.bbox_util.decode_box(outputs)
             # ---------------------------------------------------------#
             #   pbox suppression
@@ -248,16 +189,13 @@ class YOLO(object):
             top_label = np.array(results[0][:, 6], dtype='int32')
             top_conf = results[0][:, 4] * results[0][:, 5]
             top_boxes = results[0][:, :4]
-        # ---------------------------------------------------------#
-        #   设置字体与边框厚度
-        # ---------------------------------------------------------#
+
+        # 텍스트 설정
         font = ImageFont.truetype(font='model_data/simhei.ttf',
                                   size=np.floor(3e-2 * image.size[1] + 0.5).astype('int32'))
         thickness = int(max((image.size[0] + image.size[1]) // np.mean(self.input_shape), 1))
 
-        # ---------------------------------------------------------#
-        #   图像绘制
-        # ---------------------------------------------------------#
+        # 결과 그리기
         for i, c in list(enumerate(top_label)):
             predicted_class = self.class_names[int(c)]
             box = top_boxes[i]
@@ -291,48 +229,20 @@ class YOLO(object):
 
     def get_FPS(self, image, test_interval):
         image_shape = np.array(np.shape(image)[0:2])
-        # ---------------------------------------------------------#
-        #   在这里将图像转换成RGB图像，防止灰度图在预测时报错。
-        #   代码仅仅支持RGB图像的预测，所有其它类型的图像都会转化成RGB
-        # ---------------------------------------------------------#
-        image = cvtColor(image)
-        # ---------------------------------------------------------#
-        #   给图像增加灰条，实现不失真的resize
-        #   也可以直接resize进行识别
-        # ---------------------------------------------------------#
+        image = cvtColor(image)  # RGB
         image_data = resize_image(image, (self.input_shape[1], self.input_shape[0]), self.letterbox_image)
-        # ---------------------------------------------------------#
-        #   添加上batch_size维度
-        # ---------------------------------------------------------#
         image_data = np.expand_dims(np.transpose(preprocess_input(np.array(image_data, dtype='float32')), (2, 0, 1)), 0)
 
-        with torch.no_grad():
-            images = torch.from_numpy(image_data)
-            if self.cuda:
-                images = images.cuda()
-            # ---------------------------------------------------------#
-            #   将图像输入网络当中进行预测！
-            # ---------------------------------------------------------#
-            outputs = self.net(images)
-            outputs = self.bbox_util.decode_box(outputs)
-            # ---------------------------------------------------------#
-            #   将预测框进行堆叠，然后进行非极大抑制
-            # ---------------------------------------------------------#
-            results = self.bbox_util.non_max_suppression(outputs[0], self.num_classes, self.input_shape,
-                                                         image_shape, self.letterbox_image, conf_thres=self.confidence,
-                                                         nms_thres=self.nms_iou)
+        images = torch.from_numpy(image_data)
+        if self.cuda:
+            images = images.cuda()
 
         t1 = time.time()
         for _ in range(test_interval):
             with torch.no_grad():
-                # ---------------------------------------------------------#
-                #   将图像输入网络当中进行预测！
-                # ---------------------------------------------------------#
-                outputs = self.net(images)
+
+                outputs = self.model(images)
                 outputs = self.bbox_util.decode_box(outputs)
-                # ---------------------------------------------------------#
-                #   将预测框进行堆叠，然后进行非极大抑制
-                # ---------------------------------------------------------#
                 results = self.bbox_util.non_max_suppression(torch.cat(outputs, 1), self.num_classes, self.input_shape,
                                                              image_shape, self.letterbox_image,
                                                              conf_thres=self.confidence, nms_thres=self.nms_iou)
@@ -344,33 +254,17 @@ class YOLO(object):
     def get_map_txt(self, image_id, image, class_names, map_out_path):
         f = open(os.path.join(map_out_path, "detection-results/" + image_id + ".txt"), "w")
         image_shape = np.array(np.shape(image)[0:2])
-        # ---------------------------------------------------------#
-        #   在这里将图像转换成RGB图像，防止灰度图在预测时报错。
-        #   代码仅仅支持RGB图像的预测，所有其它类型的图像都会转化成RGB
-        # ---------------------------------------------------------#
         image = cvtColor(image)
-        # ---------------------------------------------------------#
-        #   给图像增加灰条，实现不失真的resize
-        #   也可以直接resize进行识别
-        # ---------------------------------------------------------#
         image_data = resize_image(image, (self.input_shape[1], self.input_shape[0]), self.letterbox_image)
-        # ---------------------------------------------------------#
-        #   添加上batch_size维度
-        # ---------------------------------------------------------#
         image_data = np.expand_dims(np.transpose(preprocess_input(np.array(image_data, dtype='float32')), (2, 0, 1)), 0)
 
         with torch.no_grad():
             images = torch.from_numpy(image_data)
             if self.cuda:
                 images = images.cuda()
-            # ---------------------------------------------------------#
-            #   将图像输入网络当中进行预测！
-            # ---------------------------------------------------------#
-            outputs = self.net(images)
+
+            outputs = self.model(images)
             outputs = self.bbox_util.decode_box(outputs)
-            # ---------------------------------------------------------#
-            #   将预测框进行堆叠，然后进行非极大抑制
-            # ---------------------------------------------------------#
             results = self.bbox_util.non_max_suppression(torch.cat(outputs, 1), self.num_classes, self.input_shape,
                                                          image_shape, self.letterbox_image, conf_thres=self.confidence,
                                                          nms_thres=self.nms_iou)
@@ -392,14 +286,13 @@ class YOLO(object):
                 continue
 
             f.write("%s %s %s %s %s %s\n" % (
-            predicted_class, score[:6], str(int(left)), str(int(top)), str(int(right)), str(int(bottom))))
+                predicted_class, score[:6], str(int(left)), str(int(top)), str(int(right)), str(int(bottom))))
 
         f.close()
         return
 
-
+# Convert nx4 boxes from [x, y, w, h] to [x1, y1, x2, y2] where xy1=top-left, xy2=bottom-right
 def xywh2xyxy(x):
-    # Convert nx4 boxes from [x, y, w, h] to [x1, y1, x2, y2] where xy1=top-left, xy2=bottom-right
     y = torch.zeros_like(x) if isinstance(x, torch.Tensor) else np.zeros_like(x)
     y[:, 0] = x[:, 0] - x[:, 2] / 2  # top left x
     y[:, 1] = x[:, 1] - x[:, 3] / 2  # top left y
@@ -410,9 +303,9 @@ def xywh2xyxy(x):
 
 import torchvision
 
-
+# Resize image to a 32-pixel-multiple rectangle https://github.com/ultralytics/yolov3/issues/232
 def letterbox(img, new_shape=(640, 640), color=(114, 114, 114), auto=True, scaleFill=False, scaleup=True):
-    # Resize image to a 32-pixel-multiple rectangle https://github.com/ultralytics/yolov3/issues/232
+
     shape = img.shape[:2]  # current shape [height, width]
     if isinstance(new_shape, int):
         new_shape = (new_shape, new_shape)
@@ -443,9 +336,9 @@ def letterbox(img, new_shape=(640, 640), color=(114, 114, 114), auto=True, scale
     img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
     return img, ratio, (dw, dh)
 
-
+# Performs Non-Maximum Suppression (NMS) on inference results
 def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6, merge=False, classes=None, agnostic=False):
-    """Performs Non-Maximum Suppression (NMS) on inference results
+    """
 
     Returns:
          detections with shape: nx6 (x1, y1, x2, y2, conf, cls)

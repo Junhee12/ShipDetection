@@ -1,7 +1,3 @@
-# -----------------------------------------------------------------------#
-#   predict.py将单张图片预测、摄像头检测、FPS测试和目录遍历检测等功能
-#   整合到了一个py文件中，通过指定mode进行模式的修改。
-# -----------------------------------------------------------------------#
 import time
 
 import cv2
@@ -10,18 +6,78 @@ from PIL import Image
 
 from yolo import YOLO
 
+import configparser
+from time import strftime
 
-class ShipDetection():
-    def __init__(self, model_path='data/yolo4_voc_weights.pth', mode='video'):
 
-        self.model = YOLO(model_path)
-        self.mode = mode
+class ShipDetection:
+    def __init__(self):
+
+        #self.generate_config()
+
+        self.config = self.read_config()
+
+        model_pramas = dict(self.config['model'])
+        self.model = YOLO(model_params=model_pramas)
+
+#    def set_confidence(self):
+
+#    def nms_iou(self):
+
+
+    def generate_config(self):
+
+        # 설정파일 만들기
+        config = configparser.ConfigParser()
+
+        # 설정파일 오브젝트 만들기
+        config['system'] = {}
+        config['system']['title'] = 'Ship Detection'
+        config['system']['version'] = '0.0.0'
+        config['system']['update'] = strftime('%Y-%m-%d %H:%M:%S')
+
+        config['input'] = {}
+        config['input']['width'] = '1920'
+        config['input']['height'] = '1080'
+
+        config['model'] = {}
+        config['model']['weight_path'] = 'data/yolo4_voc_weights.pth'
+        config['model']['classes_path'] = 'dataset/voc_names'
+        config['model']['anchors_path'] = 'dataset/yolo_anchors.txt'
+        # config['model']['anchors_mask'] =
+        # config['model']['input_shape'] = '416, 416'
+        # config['model']['confidence'] = '0.5'
+        # config['model']['nms_iou'] = '0.3'
+
+        # 설정파일 저장
+        with open('config.ini', 'w', encoding='utf-8') as configfile:
+            config.write(configfile)
+
+    def read_config(self):
+
+        # 설정파일 읽기
+        config = configparser.ConfigParser()
+        config.read('config.ini', encoding='utf-8')
+
+        # 설정파일의 색션 확인
+        # config.sections())
+        ver = config['system']['version']
+        print('config.ini file loaded(ver. %s)' % ver)
+
+        return config
 
     def detect_image(self, image):
 
         image = Image.open(image)
         result = self.model.detect_image(image)
         result.show()
+
+    def detect_image_cv2(self, image):
+
+        image = cv2.imread(image)
+        result = self.model.detect_image_cv2(image)
+        cv2.imshow('cv2_result', result)
+        cv2.waitKey()
 
     def detect_video(self, path, show=False, save_path=''):
 
@@ -65,15 +121,14 @@ class ShipDetection():
         if save_path != "":
             out.release()
 
-    def detect_video(self):
+    def detect_fps(self, image_path=''):
 
         test_interval = 100
+        image_path = 'img/street.jpg'
 
-        elif mode == "fps":
-        img = Image.open('img/street.jpg')
-        tact_time = yolo.get_FPS(img, test_interval)
+        img = Image.open(image_path)
+        tact_time = self.model.get_FPS(img, test_interval)
         print(str(tact_time) + ' seconds, ' + str(1 / tact_time) + 'FPS, @batch_size 1')
-
 
     def detect_dir(self, origin_path='img/', save_path='img_out/'):
 
@@ -91,5 +146,13 @@ class ShipDetection():
                 if not os.path.exists(save_path):
                     os.makedirs(save_path)
                 r_image.save(os.path.join(save_path, img_name))
+
+
+if __name__ == "__main__":
+    sd = ShipDetection()
+
+    #sd.detect_image('img/street.jpg')
+
+    sd.detect_fps()
 
 
